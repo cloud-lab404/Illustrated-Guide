@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>球員圖鑑</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#151c26; --panel2:#1b2431; --line:#26303d;
+    --fg:#e6edf3; --dim:#8b98a8; --accent:#2f81f7; --accent2:#1f6feb;
+    --hot:#c8322f; --cold:#2f6fc8; --warn:#d29922;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.5 "Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
+  button,input,select{font:inherit}
+
+  /* 版面：左邊篩選（欄位與排列照遊戲的「進階搜尋」），右邊清單 */
+  .wrap{display:grid;grid-template-columns:300px 1fr;min-height:100vh}
+  aside.filters{background:var(--panel);border-right:1px solid var(--line);
+                padding:12px;overflow:auto;max-height:100vh;position:sticky;top:0}
+  main{min-width:0;padding:10px 12px 40px}
+
+  h1{font-size:16px;margin:0 0 10px;letter-spacing:.06em}
+  .sec{margin:0 0 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+  .sec>h2{margin:0;padding:6px 9px;font-size:12.5px;color:var(--dim);
+          border-bottom:1px solid var(--line);display:flex;justify-content:space-between;
+          align-items:center;gap:6px}
+  .sec>div{padding:8px 9px}
+  .grid{display:grid;gap:4px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g5{grid-template-columns:repeat(5,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  button.f{background:#232d3a;color:var(--fg);border:1px solid var(--line);
+           border-radius:5px;padding:5px 2px;font-size:12px;cursor:pointer;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  button.f:hover{border-color:var(--accent)}
+  button.f.on{background:var(--accent2);border-color:var(--accent);color:#fff}
+  .sec>h2 button.f{padding:1px 7px;font-size:11.5px}
+  .tabs{display:grid;grid-template-columns:1fr 1fr;margin-bottom:6px}
+  .tabs button{background:#1a2331;border:1px solid var(--line);color:var(--dim);
+               padding:5px;cursor:pointer}
+  .tabs button:first-child{border-radius:5px 0 0 5px}
+  .tabs button:last-child{border-radius:0 5px 5px 0}
+  .tabs button.on{background:#0f2547;border-color:var(--accent);color:#fff}
+  input[type=search],input[type=number]{background:#0f1620;color:var(--fg);
+    border:1px solid var(--line);border-radius:5px;padding:5px 7px;width:100%}
+  .ovr{display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .go{display:flex;gap:6px;margin:2px 0 20px}
+  .go button{flex:1;padding:7px;border-radius:6px;border:1px solid var(--line);
+             background:var(--panel2);color:var(--fg);cursor:pointer}
+
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .count{color:var(--dim);font-variant-numeric:tabular-nums}
+  select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+         border-radius:6px;padding:5px 8px}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{padding:5px 7px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  th{position:sticky;top:0;background:var(--panel);cursor:pointer;
+     font-weight:600;color:var(--dim);font-size:12.5px;z-index:5}
+  th.sorted{color:var(--fg)}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:var(--panel)}
+  tbody tr.sel{background:var(--panel2)}
+  td.ovr2{font-weight:700;font-size:15px}
+  td.num{text-align:right}
+  .tag{display:inline-block;padding:1px 6px;border-radius:4px;background:var(--panel2);
+       border:1px solid var(--line);font-size:12px;color:var(--dim)}
+  .flag{color:var(--warn);font-size:12px}
+  .empty{color:var(--dim);padding:24px 0}
+  .more{margin:14px auto 0;display:block;padding:6px 14px;border-radius:6px;
+        background:var(--panel2);color:var(--fg);border:1px solid var(--line);cursor:pointer}
+
+  /* 右側詳情 */
+  .detail{position:fixed;top:0;right:0;width:340px;height:100%;overflow:auto;
+          background:var(--panel);border-left:1px solid var(--line);
+          padding:14px;transform:translateX(102%);transition:transform .16s ease;z-index:30}
+  .detail.open{transform:none}
+  .detail h2{margin:.2em 0 .1em;font-size:19px}
+  .detail .close{position:absolute;top:10px;right:12px;background:var(--panel2);
+                 color:var(--fg);border:1px solid var(--line);border-radius:5px;
+                 padding:3px 8px;cursor:pointer}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:8px 0}
+  .kv div:nth-child(odd){color:var(--dim)}
+  .sbar{position:relative;background:var(--panel2);border-radius:3px;height:16px}
+  .sbar>i{position:absolute;inset:0 auto 0 0;background:var(--accent2);border-radius:3px}
+  .sbar>span{position:relative;padding-left:6px;font-size:12px;line-height:16px}
+  .zones{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;width:150px}
+  .zones div{aspect-ratio:1;display:grid;place-items:center;border-radius:4px;
+             font-weight:700;background:var(--panel2)}
+  .zones .hot{background:var(--hot)}
+  .zones .cold{background:var(--cold)}
+  .pots{display:flex;flex-wrap:wrap;gap:4px}
+
+  @media (max-width:820px){
+    .wrap{grid-template-columns:1fr}
+    aside.filters{position:static;max-height:none}
+    .detail{width:100%}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- 篩選：欄位、分組與排列都照遊戲裡的「進階搜尋」 -->
+  <aside class="filters">
+    <h1>球員圖鑑</h1>
+
+    <div class="sec"><h2>名稱</h2><div>
+      <input id="q" type="search" placeholder="搜尋名字（例：Judge）">
+    </div></div>
+
+    <div class="sec"><h2>OVR<button class="f" id="ovrReset">重設</button></h2><div>
+      <div class="ovr">
+        <input id="lo" type="number" min="0" max="130" value="0">
+        <span class="count">~</span>
+        <input id="hi" type="number" min="0" max="130" value="130">
+      </div>
+      <input id="loR" type="range" min="0" max="130" value="0">
+      <input id="hiR" type="range" min="0" max="130" value="130">
+    </div></div>
+
+    <div class="sec"><h2>球隊<button class="f" id="teamAll">全部</button></h2><div>
+      <div class="tabs" id="league">
+        <button data-lg="AL" class="on">AL</button><button data-lg="NL">NL</button>
+      </div>
+      <div class="grid g4" id="teams"></div>
+    </div></div>
+
+    <div class="sec"><h2>卡片類型<button class="f" id="typeAll">全部</button></h2><div>
+      <div class="grid g4" id="types"></div>
+    </div></div>
+
+    <div class="sec"><h2>位置<button class="f" id="posAll">全部</button></h2><div>
+      <div class="grid g5" id="poss"></div>
+    </div></div>
+
+    <div class="sec"><h2>類別（欄位名稱不同，只能選一邊）</h2><div>
+      <div class="grid g2" id="cls"></div>
+    </div></div>
+
+    <div class="sec"><h2>潛力（全部符合）<button class="f" id="potAll">全部</button></h2><div>
+      <div class="grid g2" id="pots"></div>
+    </div></div>
+
+    <div class="go"><button id="reset">清除全部條件</button></div>
+  </aside>
+
+  <main>
+    <div class="bar">
+      <span class="count" id="count"></span>
+      <label class="count">排序 <select id="sort"></select></label>
+      <button class="f" id="dir">▼ 遞減</button>
+      <span class="count">名字後的 <span class="flag">*</span> 表示有欄位沒讀到</span>
+    </div>
+    <table>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>沒有符合條件的卡片。</div>
+    <button class="more" id="more" hidden>再顯示 200 張</button>
+  </main>
+</div>
+
+<div class="detail" id="detail">
+  <button class="close" onclick="closeDetail()">✕</button>
+  <div id="detailBody"></div>
+</div>
+
+<script src="cards.js"></script>
+<script>
+const CARDS = window.CARDS || [];
+const BAT = ["力量","準確","選球","耐力","跑壘","守備"];
+const PIT = ["球速","變化","球威","控球","持久力","守備"];
+// 這幾組的順序都照遊戲的篩選面板
+const TEAMS = {AL:["NYY","BOS","TB","TOR","BAL","MIN","DET","CWS","CLE","KC","LAA","TEX","SEA","ATH","HOU"],
+               NL:["PHI","MIA","ATL","NYM","WSH","STL","CHC","MIL","CIN","PIT","LAD","COL","SF","SD","AZ"]};
+const TYPES = ["Moment","Supreme Moment","Live","Season",
+               "Impact","Prime","Signature","Signature Black",
+               "FA Impact","FA Prime","FA Signature","FA Signature Black",
+               "WBC Prime","WBC Signature","WBC Signature Black","HOF"];
+const POSS = ["SP","RP","CP","C","1B","2B","3B","SS","LF","CF","RF","DH"];
+
+const state = {
+  q:"", cls:"batter", league:"AL",
+  types:new Set(), teams:new Set(), poss:new Set(), pots:new Set(),
+  lo:0, hi:130, sort:"ovr", desc:true, shown:200,
+};
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+
+/* ---------- 篩選按鈕 ---------- */
+function makeChips(el, values, set){
+  el.innerHTML = "";
+  for (const v of values){
+    const b = document.createElement("button");
+    b.className = "f" + (set.has(v) ? " on" : "");
+    b.textContent = v;
+    b.title = v;
+    b.onclick = () => {
+      set.has(v) ? set.delete(v) : set.add(v);
+      b.classList.toggle("on", set.has(v));
+      state.shown = 200;
+      render();
+    };
+    el.appendChild(b);
+  }
+}
+// 只列資料裡真的有的卡片類型（Live／Season 沒收），但順序照遊戲
+const haveTypes = new Set(CARDS.map(c => c.type));
+makeChips($("types"), TYPES.filter(t => haveTypes.has(t)), state.types);
+makeChips($("teams"), TEAMS[state.league], state.teams);
+makeChips($("poss"), POSS, state.poss);
+
+for (const b of $("league").children){
+  b.onclick = () => {
+    state.league = b.dataset.lg;
+    [...$("league").children].forEach(x => x.classList.toggle("on", x === b));
+    makeChips($("teams"), TEAMS[state.league], state.teams);
+  };
+}
+for (const [key, label] of [["batter","打者"],["pitcher","投手"]]){
+  const b = document.createElement("button");
+  b.className = "f" + (state.cls === key ? " on" : "");
+  b.textContent = label;
+  b.onclick = () => {
+    state.cls = key;
+    [...$("cls").children].forEach(x => x.classList.toggle("on", x === b));
+    state.sort = "ovr"; state.desc = true; state.shown = 200;
+    render();
+  };
+  $("cls").appendChild(b);
+}
+
+$("q").oninput = e => { state.q = e.target.value.trim().toLowerCase(); state.shown = 200; render(); };
+function syncOvr(from){
+  if (from === "num"){ $("loR").value = $("lo").value; $("hiR").value = $("hi").value; }
+  else { $("lo").value = $("loR").value; $("hi").value = $("hiR").value; }
+  state.lo = +$("lo").value; state.hi = +$("hi").value;
+  if (state.lo > state.hi) [state.lo, state.hi] = [state.hi, state.lo];
+  state.shown = 200;
+  render();
+}
+for (const id of ["lo","hi"]) $(id).oninput = () => syncOvr("num");
+for (const id of ["loR","hiR"]) $(id).oninput = () => syncOvr("range");
+$("ovrReset").onclick = () => { $("lo").value = 0; $("hi").value = 130; syncOvr("num"); };
+
+function clearSet(set, el){
+  set.clear();
+  [...el.children].forEach(b => b.classList.remove("on"));
+  state.shown = 200;
+  render();
+}
+$("teamAll").onclick = () => clearSet(state.teams, $("teams"));
+$("typeAll").onclick = () => clearSet(state.types, $("types"));
+$("posAll").onclick  = () => clearSet(state.poss, $("poss"));
+$("potAll").onclick  = () => clearSet(state.pots, $("pots"));
+$("reset").onclick = () => {
+  state.q = ""; $("q").value = "";
+  $("lo").value = 0; $("hi").value = 130; $("loR").value = 0; $("hiR").value = 130;
+  state.lo = 0; state.hi = 130;
+  for (const [s, el] of [[state.teams,$("teams")],[state.types,$("types")],
+                         [state.poss,$("poss")],[state.pots,$("pots")]]){
+    s.clear();
+    [...el.children].forEach(b => b.classList.remove("on"));
+  }
+  state.shown = 200;
+  render();
+};
+$("dir").onclick = () => {
+  state.desc = !state.desc;
+  $("dir").textContent = state.desc ? "▼ 遞減" : "▲ 遞增";
+  render();
+};
+$("sort").onchange = e => { state.sort = e.target.value; render(); };
+$("more").onclick = () => { state.shown += 200; render(); };
+
+/* ---------- 潛力 ---------- */
+// 潛力名稱在同一類別多半是固定五項，特殊卡（HOF 等）會有專屬項目，
+// 所以表格欄位取「目前結果裡最常見的五項」，篩到 HOF 就會自動換成那一組。
+function potNames(list){
+  const freq = new Map();
+  for (const c of list)
+    for (const p of (c.potentials || []))
+      if (p.name && !p.name.startsWith("?")) freq.set(p.name, (freq.get(p.name) || 0) + 1);
+  return [...freq.entries()].sort((a,b) => b[1]-a[1]).slice(0,5).map(e => e[0]);
+}
+const potOf = (card, name) => (card.potentials || []).find(p => p.name === name);
+makeChips($("pots"),
+          [...new Set(CARDS.flatMap(c => (c.potentials||[]).map(p=>p.name)))]
+            .filter(p => p && !p.startsWith("?")).sort(),
+          state.pots);
+
+/* ---------- 篩選與排序 ---------- */
+const statNames = () => state.cls === "pitcher" ? PIT : BAT;
+
+function filtered(){
+  const names = statNames();
+  const out = CARDS.filter(c => {
+    if (c.class !== state.cls) return false;
+    if (state.q && !(c.name || "").toLowerCase().includes(state.q)) return false;
+    if (state.types.size && !state.types.has(c.type)) return false;
+    if (state.teams.size && !state.teams.has(c.team)) return false;
+    if (state.poss.size && !(c.positions || []).some(p => state.poss.has(p))) return false;
+    if (c.ovr != null && (c.ovr < state.lo || c.ovr > state.hi)) return false;
+    if (c.ovr == null && (state.lo > 0 || state.hi < 130)) return false;
+    if (state.pots.size){
+      const have = new Set((c.potentials || []).map(p => p.name));
+      for (const p of state.pots) if (!have.has(p)) return false;
+    }
+    return true;
+  });
+  const key = state.sort;
+  out.sort((a,b) => {
+    let x, y;
+    if (key === "ovr"){ x = a.ovr ?? -1; y = b.ovr ?? -1; }
+    else if (["name","team","type"].includes(key)){ x = a[key] || ""; y = b[key] || ""; }
+    else if (key === "angle"){ x = a.angle ?? -1; y = b.angle ?? -1; }
+    else if (key === "sum"){
+      x = names.reduce((s,n)=>s+(a.stats[n]??0),0);
+      y = names.reduce((s,n)=>s+(b.stats[n]??0),0);
+    }
+    else if (key.startsWith("pot:")){
+      const pn = key.slice(4), pa = potOf(a,pn), pb = potOf(b,pn);
+      x = pa ? (pa.dots??0)+(pa.locks??0) : -1;
+      y = pb ? (pb.dots??0)+(pb.locks??0) : -1;
+    }
+    else { x = a.stats[key] ?? -1; y = b.stats[key] ?? -1; }
+    const c = x < y ? -1 : x > y ? 1 : 0;
+    return state.desc ? -c : c;
+  });
+  return out;
+}
+
+/* ---------- 表格 ---------- */
+function render(){
+  const names = statNames();
+  const list = filtered();
+  const pots = potNames(list);
+  const cols = [["ovr","OVR"],["name","名字"],["team","隊"],["type","類型"],["pos","守位"]]
+    .concat(names.map(n => [n,n]))
+    .concat([["sum","總和"]], state.cls === "batter" ? [["angle","仰角"]] : [])
+    .concat(pots.map(n => ["pot:"+n, n]));
+
+  const sortSel = $("sort");
+  const sig = state.cls + "|" + pots.join();
+  if (sortSel.dataset.sig !== sig){
+    sortSel.innerHTML = "";
+    for (const [k,l] of cols.filter(c => c[0] !== "pos")){
+      const o = document.createElement("option");
+      o.value = k; o.textContent = l;
+      sortSel.appendChild(o);
+    }
+    sortSel.dataset.sig = sig;
+  }
+  sortSel.value = state.sort;
+
+  const head = $("head");
+  head.innerHTML = "";
+  for (const [key,label] of cols){
+    const th = document.createElement("th");
+    th.textContent = label + (state.sort === key ? (state.desc ? " ▼" : " ▲") : "");
+    th.className = state.sort === key ? "sorted" : "";
+    if (key !== "pos") th.onclick = () => {
+      if (state.sort === key) state.desc = !state.desc;
+      else { state.sort = key; state.desc = key !== "name"; }
+      $("dir").textContent = state.desc ? "▼ 遞減" : "▲ 遞增";
+      render();
+    };
+    head.appendChild(th);
+  }
+
+  const tb = $("rows");
+  tb.innerHTML = "";
+  for (const c of list.slice(0, state.shown)){
+    const tr = document.createElement("tr");
+    const sum = names.reduce((s,n)=>s+(c.stats[n]??0),0);
+    const cells = [
+      `<td class="ovr2">${c.ovr ?? "—"}</td>`,
+      `<td>${esc(c.name || "—")}${(c.flags||[]).length ? ' <span class="flag">*</span>' : ""}</td>`,
+      `<td>${c.team || "—"}</td>`,
+      `<td><span class="tag">${esc(c.type)}</span></td>`,
+      `<td>${(c.positions || []).join("/") || "—"}</td>`,
+      ...names.map(n => `<td class="num">${c.stats[n] ?? "—"}</td>`),
+      `<td class="num">${sum || "—"}</td>`,
+    ];
+    if (state.cls === "batter") cells.push(`<td class="num">${c.angle ?? "—"}</td>`);
+    for (const pn of pots){
+      const p = potOf(c, pn);
+      cells.push(`<td class="num">${p ? (p.dots ?? "—") + (p.locks ? `+${p.locks}` : "") : "—"}</td>`);
+    }
+    tr.innerHTML = cells.join("");
+    tr.onclick = () => {
+      openDetail(c);
+      [...tb.children].forEach(x => x.classList.remove("sel"));
+      tr.classList.add("sel");
+    };
+    tb.appendChild(tr);
+  }
+  $("count").textContent = `${list.length.toLocaleString()} 張 / 共 ${CARDS.length.toLocaleString()}`;
+  $("empty").hidden = list.length > 0;
+  $("more").hidden = list.length <= state.shown;
+}
+
+/* ---------- 詳情 ---------- */
+function openDetail(c){
+  const names = c.class === "pitcher" ? PIT : BAT;
+  const bars = names.map(n => {
+    const v = c.stats[n] ?? 0, tot = (c.total || {})[n];
+    return `<div>${n}</div><div class="sbar"><i style="width:${Math.min(100,v)}%"></i>
+      <span>${c.stats[n] ?? "—"}${tot != null && tot !== c.stats[n] ? ` → ${tot}` : ""}</span></div>`;
+  }).join("");
+  const zones = (c.zones || []).length === 9 ? `
+    <h3>紅區</h3>
+    <div class="zones">${c.zones.map((v,i) =>
+      `<div class="${c.zone_kinds[i] || ""}">${v ?? "—"}</div>`).join("")}</div>
+    <div class="kv"><div>平均擊球仰角</div><div>${c.angle ?? "—"}°</div></div>` : "";
+  const pitches = (c.pitches || []).length ? `
+    <h3>球種</h3><div class="pots">${c.pitches.map(p =>
+      `<span class="tag">${esc(p.pitch)} ${esc(p.grade)}</span>`).join("")}</div>` : "";
+  const pots = (c.potentials || []).length ? `
+    <h3>潛力</h3><div class="kv">${c.potentials.map(p =>
+      `<div>${esc(p.name)}</div><div>${"●".repeat(Math.max(0,p.dots||0))}${
+        "🔒".repeat(Math.max(0,p.locks||0))} <span class="count">${
+        (p.dots||0)+(p.locks||0)} 級</span></div>`).join("")}</div>` : "";
+  const flags = (c.flags || []).length ? `<p class="flag">讀取備註：${c.flags.join("、")}</p>` : "";
+  $("detailBody").innerHTML = `
+    <h2>${esc(c.name || "—")}</h2>
+    <div class="kv">
+      <div>OVR</div><div>${c.ovr ?? "—"}${c.ovr_src ? `（${c.ovr_src}）` : ""}</div>
+      <div>球隊</div><div>${c.team || "—"}</div>
+      <div>卡片類型</div><div>${esc(c.type)}</div>
+      <div>守位</div><div>${(c.positions || []).join(" / ") || "—"}</div>
+      <div>類別</div><div>${c.class === "pitcher" ? "投手" : "打者"}</div>
+    </div>
+    <h3>數值</h3><div class="kv">${bars}</div>
+    ${zones}${pitches}${pots}${flags}`;
+  $("detail").classList.add("open");
+}
+function closeDetail(){ $("detail").classList.remove("open"); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDetail(); });
+
+render();
+</script>
+</body>
+</html>

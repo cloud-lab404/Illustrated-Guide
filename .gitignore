@@ -1,0 +1,25 @@
+# 掃描結果與中間產物：量大、會一直長，而且是每個人自己跑出來的
+dex_data/*/[A-Z]*.jsonl
+dex_data/*/names/
+dex_data/*/_review/
+dex_data/*/_suspect/
+dex_data/*/_batch_*/
+dex_data/queue.json
+dex_data/queue.json.*
+dex_data/cards.json
+dex_data/name_fix.json
+dex_data/_pot_pool.json
+dex_data/_filter_fail.png
+dex_data/teams/
+web/cards.js
+web/index.html.bak
+
+# 字形樣本的暫存池（label 之後就不需要了）
+dex_data/glyphs/*/_pool/
+dex_data/badges/_unknown/
+
+# 執行紀錄
+*.log
+
+__pycache__/
+*.pyc
