@@ -38,9 +38,17 @@ python dex.py status
 4. 掃完之後補讀名字、匯出網頁資料：
 
 ```powershell
-python dex.py names harvest      # 收字形樣本（自動標記）
-python dex.py names read         # 從存下來的名字裁圖重讀名字
-python dex.py export             # 產生 web/cards.js
+bash name_boot.sh                # 名字：自我擴張字形庫 -> 重讀 -> 匯出（一次做完）
+python dex.py export             # 只重新匯出的話
+```
+
+`name_boot.sh` 裡面做的事拆開來是：
+
+```powershell
+python dex.py names extend       # 用現有樣本對齊 OCR 字串，補進新字元（可重複跑）
+python dex.py names harvest      # 只收「整串都讀對」的名字當樣本
+python dex.py names read         # 從存下來的名字裁圖重讀，寫成對照表
+python dex.py export             # 產生 web/cards.js（名字會優先用對照表）
 ```
 
 5. 用瀏覽器打開 `web/index.html`。資料是 `web/cards.js`，用 `file://` 直接開也載得到。
@@ -89,6 +97,10 @@ python dex.py export             # 產生 web/cards.js
 - **數字不用 tesseract。** 它對這款字型有系統性錯誤（7→1、5→9、76→16），
   而錯的數字寫進資料庫沒人看得出來。改成自建字形樣本比對（`dex_data/glyphs/`），
   對不上就留空，不猜。
+- **名字用自我擴張的字形庫讀。** 名字是最難的一欄，tesseract 在這個字型上大概只讀對三成。
+  但名字的字型也是固定的，所以做法是：先用 OCR 讀得準的名字收一批字形樣本，
+  之後每一輪用「已知的字都跟 OCR 對得上、只剩一兩個未知」的名字去補那幾個未知字，
+  一輪一輪把整個字母表、數字與撇號學完（`names extend`）。
 - **名字離線讀。** 名字是最難讀的一欄（字疊在會發光的卡圖上），而且現場做 OCR 佔掉
   三分之二的解析時間。所以掃描時只把名字那一條存成小圖，之後再慢慢讀、可以反覆改進，
   不必為了名字重掃一次。
@@ -126,9 +138,10 @@ python dex.py glyphs label --font stat --digits "7,8,0,..."       # 照montage�
 python dex.py glyphs harvest --font stat --frames "shots_hof/*.png"
 python dex.py check                             # 檢查字形樣本有沒有標錯
 
-python dex.py names collect --out n.png         # 名字字元分群
-python dex.py names label --chars "a,b,c,..."   # 照montage順序標
-python dex.py names harvest                     # 自動收樣本
+python dex.py names collect --out n.png         # 名字字元分群（附上下文，方便人工標）
+python dex.py names label --chars "a,b,c,..."   # 照順序標
+python dex.py names extend                      # 自我擴張：已知字對齊 OCR，補未知字
+python dex.py names harvest                     # 只收整串讀對的名字
 python dex.py names read                        # 重讀所有名字
 
 python dex.py pots collect --frames "p2/*.png" --out p.png   # 潛力名稱（中文）分群

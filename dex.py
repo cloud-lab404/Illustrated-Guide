@@ -50,6 +50,8 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dex_data")
 LABELS_PATH = os.path.join(OUT_DIR, "potential_labels.json")
 
 DEVICE_SIZE = (900, 1600)          # 圖鑑是直向的，screencap 出來就是這個尺寸
+GAME_PKG = "com.com2us.futuremlb.android.google.global.normal"
+GAME_ACTIVITY = f"{GAME_PKG}/com.com2us.futuremlb.MainActivity"
 
 # ---------------------------------------------------------------- 座標
 
@@ -148,16 +150,49 @@ class Device:
         if wait:
             time.sleep(wait)
 
+    def app_alive(self):
+        """遊戲行程還在不在（不管有沒有在最前面）。"""
+        try:
+            return bool(self.sh(f"pidof {GAME_PKG}", timeout=15).strip())
+        except Exception:
+            return False
+
+    def in_front(self):
+        """遊戲有沒有在最前面。行程活著但被切到背景時，畫面會是模擬器桌面。"""
+        try:
+            out = self.sh("dumpsys window", timeout=20)
+        except Exception:
+            return False
+        for line in out.splitlines():
+            if "mCurrentFocus" in line or "mFocusedApp" in line:
+                if GAME_PKG in line:
+                    return True
+        return False
+
+    def launch_app(self, wait=8.0):
+        self.sh(f"am start -n {GAME_ACTIVITY}")
+        time.sleep(wait)
+
+    def key(self, keycode, wait=0.0):
+        self.sh(f"input keyevent {int(keycode)}")
+        if wait:
+            time.sleep(wait)
+
     def swipe(self, x1, y1, x2, y2, ms=600, wait=0.0):
         self.sh(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(ms)}")
         if wait:
             time.sleep(wait)
 
-    def grab(self):
-        raw = self._run(["exec-out", "screencap", "-p"], binary=True)
-        if not raw:
-            return None
-        return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    def grab(self, tries=3):
+        """截圖偶爾會拉回空的（模擬器忙的時候），重試幾次再放棄。"""
+        for _ in range(tries):
+            raw = self._run(["exec-out", "screencap", "-p"], binary=True)
+            if raw:
+                img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+                if img is not None and img.shape[0] >= 1000:
+                    return img
+            time.sleep(0.4)
+        return None
 
     def check_size(self):
         out = self.sh("wm size")
@@ -241,6 +276,10 @@ def _masks(img):
         out.append(((gray >= t) * 255).astype(np.uint8))
     _, o = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     out.append(o)
+    # 自適應門檻：字疊在有亮有暗的卡圖上時，全域門檻會把亮處那半段整段吃掉
+    if min(gray.shape) >= 12:
+        out.append(cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                         cv2.THRESH_BINARY, 25, -8))
     if img.ndim == 3:
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         out.append(cv2.inRange(hsv, np.array([0, 0, 200], np.uint8),
@@ -771,6 +810,8 @@ def zone_grid_present(img):
     第 3 頁只有打者有紅區九宮格；投手那一頁放的是「體力」與「球種資訊」。
     所以先看九宮格區域是不是紅／藍色塊，再決定要讀什麼。
     """
+    if img is None:
+        return False
     h = int(3 * ZONE_STEP_Y)
     w = int(3 * ZONE_STEP_X)
     reg = img[ZONE_Y0:ZONE_Y0 + h, ZONE_X0:ZONE_X0 + w]
@@ -1033,6 +1074,8 @@ NAV_MANAGE     = (516, 1520)        # 底部導覽的「球隊管理」
 
 def page_of(img):
     """回傳 (目前第幾頁 0-based, 總頁數)；不是詳情頁就 (None, 頁數)。"""
+    if img is None or img.shape[0] < 1456 or img.shape[1] < 620:
+        return None, 0
     strip = img[1424:1456, 280:620]
     hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
@@ -1070,8 +1113,26 @@ def where(dev, img=None):
     return state, img
 
 
-def goto_dex(dev, tries=8, verbose=True):
-    """不管現在在哪，把畫面帶回圖鑑清單。回傳 True/False。"""
+def wait_for_game(dev, timeout=240, verbose=True):
+    """遊戲閃退後重開，等到看得懂的畫面為止（實測 B 台跑到一半整個掉回模擬器桌面）。"""
+    if verbose:
+        alive = dev.app_alive()
+        print(f"    遊戲不在前景（行程{'還在' if alive else '已結束'}），重新啟動…", flush=True)
+    dev.launch_app(wait=10)
+    end = time.time() + timeout
+    while time.time() < end:
+        state, _ = where(dev)
+        if state in ("grid", "detail", "panel", "manage", "main"):
+            if verbose:
+                print(f"    重開後在 {state}", flush=True)
+            return True
+        time.sleep(5)
+    return False
+
+
+def goto_dex(dev, tries=10, verbose=True):
+    """不管現在在哪，把畫面帶回圖鑑清單；遊戲掛了就重開。回傳 True/False。"""
+    unknown = 0
     for _ in range(tries):
         state, img = where(dev)
         if state == "grid":
@@ -1087,12 +1148,23 @@ def goto_dex(dev, tries=8, verbose=True):
         elif state == "main":
             dev.tap(*NAV_MANAGE, wait=3.0)
         else:
-            dev.key(4)                       # 退一步再看
-            time.sleep(2.0)
+            unknown += 1
+            if unknown == 1:
+                dev.key(4)                   # 可能只是彈窗，先退一步
+                time.sleep(2.0)
+            elif not dev.in_front():
+                # 行程可能還活著只是被切到背景（實測掉回模擬器桌面），am start 會拉回前景
+                if not wait_for_game(dev, verbose=verbose):
+                    return False
+            else:
+                dev.key(4)
+                time.sleep(3.0)
     return False
 
 
 def read_count(img):
+    if img is None or img.shape[0] < 460:
+        return None
     txt, _ = ocr_field(crop(img, R_COUNT), whitelist="0123456789/", psm=7, scale=3)
     m = re.search(r"(\d+)\s*/\s*(\d+)", txt.replace(" ", ""))
     return int(m.group(2)) if m else None
@@ -1146,25 +1218,35 @@ def _tap_until_selected(dev, xy, tries=3, wait=0.6):
     return _selected(dev.grab(), *xy)
 
 
+# 籤上顯示的是遊戲裡的名稱，跟程式內部用的簡稱不一樣
+CHIP_NAME = {
+    "WBC Prime": "World Baseball Classic Prime",
+    "WBC Signature": "World Baseball Classic Signature",
+    "WBC Signature Black": "World Baseball Classic Signature Black",
+}
+
+
 def verify_filter(img, card_type, team):
     """
     確認篩選真的套上了。單選一個卡片類型時，清單上方的籤會直接顯示類型名稱
     （多選才顯示「卡片 (N)」），所以就找那個名字；球隊則比對球隊籤。
     回傳問題清單，空的代表沒問題。
     """
+    if img is None or img.shape[0] < 300:
+        return ["截圖是空的"]
     bad = []
     txt, _ = ocr_field(crop(img, R_CHIP_ROW),
                        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ()",
                        psm=7, scale=3, early=200)
     flat = re.sub(r"[^A-Za-z0-9]", "", txt).lower()
-    want = re.sub(r"[^A-Za-z0-9]", "", card_type).lower()
+    want = re.sub(r"[^A-Za-z0-9]", "", CHIP_NAME.get(card_type, card_type)).lower()
     # 籤上的字會被讀錯幾個字母（Supreme 讀成 Suprame），所以比「最長共同子序列」的比例，
     # 不要求完全相符。真正精確的那道檢查是面板裡「只有這一顆按鈕變藍」。
     m = [[0] * (len(flat) + 1) for _ in range(len(want) + 1)]
     for i, a in enumerate(want, 1):
         for j, b in enumerate(flat, 1):
             m[i][j] = m[i - 1][j - 1] + 1 if a == b else max(m[i - 1][j], m[i][j - 1])
-    if not want or m[-1][-1] / len(want) < 0.6:
+    if not want or m[-1][-1] / len(want) < 0.5:
         bad.append(f"籤上找不到 {card_type}（讀到 {txt!r}）")
     if team:
         t, _ = ocr_field(crop(img, R_CHIP_TEAM),
@@ -1195,9 +1277,21 @@ def apply_filter(dev, card_type, ovr=None, team=None, expect_max=20000, verbose=
         if team:
             lg, trow, tcol = TEAM_SLOT[team]     # 不能叫 row/col，會蓋掉卡片類型的座標
             dev.tap(top[0] + TEAM_TAB_D[lg][0], top[1] + TEAM_TAB_D[lg][1], wait=0.9)
-            if not _tap_until_selected(dev, (top[0] + TEAM_DX[tcol], top[1] + TEAM_DY[trow])):
+            picked = False
+            for _ in range(4):
+                loc, _sc = find_tpl(dev.grab(), "圖鑑_OVR.png", 0.70)
+                if loc is None:                  # 面板被捲走了，拉回頂端再說
+                    loc = _panel_to_top(dev)
+                    if loc is None:
+                        break
+                xy = (loc[0] + TEAM_DX[tcol], loc[1] + TEAM_DY[trow])
+                if _selected(dev.grab(), *xy):
+                    picked = True
+                    break
+                dev.tap(*xy, wait=0.7)
+            if not picked:
                 if verbose:
-                    print(f"  {team} 按鈕沒選上，重試")
+                    print(f"  {team} 按鈕選不到，重試")
                 dev.tap(*PANEL_CLOSE, wait=1.5)
                 continue
         if ovr is None:
@@ -1207,37 +1301,52 @@ def apply_filter(dev, card_type, ovr=None, team=None, expect_max=20000, verbose=
                 print(f"  OVR 設不到 {ovr}，重試")
             dev.tap(*PANEL_CLOSE, wait=1.5)
             continue
-        grid, anchor = find_type_grid(dev)
-        if grid is None:
+        # 面板會因為慣性而位移，所以每一次都重新定位錨點再點，並確認選中的就是它。
+        picked = False
+        for _ in range(4):
+            grid, anchor = find_type_grid(dev)
+            if grid is None:
+                continue
+            on = type_selection(dev, anchor)
+            if on == [card_type]:
+                picked = True
+                break
+            if on:                                           # 有選錯的，先按「全部」清空
+                dev.tap(anchor[0] + 565, anchor[1] + 29, wait=0.7)
+            mx, my = grid
+            dev.tap(mx + TYPE_W / 2 + TYPE_COL_PITCH * col,
+                    my + TYPE_H / 2 + TYPE_ROW_PITCH * row, wait=0.7)
+        if not picked:
             if verbose:
-                print("  找不到卡片類型區塊，重試")
-            dev.tap(*PANEL_CLOSE, wait=1.5)
-            continue
-        mx, my = grid
-        dev.tap(anchor[0] + 565, anchor[1] + 29, wait=0.7)   # 「全部」＝清空已選
-        tx = mx + TYPE_W / 2 + TYPE_COL_PITCH * col
-        ty = my + TYPE_H / 2 + TYPE_ROW_PITCH * row
-        dev.tap(tx, ty, wait=0.7)
-        on = type_selection(dev, anchor)
-        if on != [card_type]:                                # 點到隔壁或多選就重來
-            if verbose:
-                print(f"  類型選成 {on or '（沒選上）'}，重試"
-                      f"（錨 {anchor}、點在 {int(tx)},{int(ty)}）")
-                cv2.imencode(".png", dev.grab())[1].tofile(
-                    os.path.join(OUT_DIR, "_filter_fail.png"))
+                print(f"  類型選不到 {card_type}，重試")
             dev.tap(*PANEL_CLOSE, wait=1.5)
             continue
         dev.tap(*PANEL_SEARCH, wait=2.8)
         img = dev.grab()
+        if img is None:
+            if verbose:
+                print("  截圖拉不回來，重試")
+            continue
         n = read_count(img)
         # 只看張數不夠：有一次「全部」把類型全清掉，結果拿到整個球隊 1157 張也小於上限，
         # 就這樣掃了一整批錯的卡。所以一定要核對籤上的條件。
+        if n == 0:                      # 這個球隊沒有這個卡種，是正常結果
+            if verbose:
+                print(f"  篩選 {card_type}/{team or '全部'} -> 0 張")
+            return 0
         bad = verify_filter(img, card_type, team)
-        if not n or n >= expect_max:
+        hard = n is None or n >= expect_max
+        if hard:
             bad.append(f"張數 {n}")
         if not bad:
             if verbose:
                 print(f"  篩選 {card_type}/{team or '全部'} -> {n} 張")
+            return n
+        if not hard and attempt >= 2:
+            # 面板裡已經確認「只有這一顆類型鈕變藍、球隊鈕也變藍」，
+            # 籤只是第二道；籤的字被卡圖或字距吃掉是常事，不該為此丟掉整片。
+            if verbose:
+                print(f"  籤看不清（{'、'.join(bad)}），但面板已確認，照樣開掃 -> {n} 張")
             return n
         if verbose:
             print(f"  篩選沒套好（{'、'.join(bad)}），重試")
@@ -1384,7 +1493,7 @@ def sweep(dev, card_type, team=None, batch_pairs=12, limit=None, sleep_s=0.35,
         return -1, 0
     if total == 0:
         print(f"  {card_type} / {team}：0 張，跳過")
-        return 0, 0
+        return 0, 0        # 這個球隊沒有這個卡種，算做完
     if limit:
         total = min(total, limit)
 
@@ -1846,8 +1955,41 @@ def finish_slice(serial, card_type, team, state, got=None):
     _queue_save(q)
 
 
+def _run_lock(serial):
+    """
+    一台模擬器只准有一個掃描程序。同一台跑兩個會互搶畫面，看起來像「按鈕沒選上」，
+    而且速度掉一半——實測發生過，很難從症狀看出原因，所以這裡直接擋掉。
+    """
+    path = os.path.join(OUT_DIR, f".run.{serial.replace(':', '_')}.lock")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                pid = int(fh.read().strip() or 0)
+        except (OSError, ValueError):
+            pid = 0
+        alive = False
+        if pid:
+            try:
+                out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                     capture_output=True, timeout=20)
+                alive = str(pid) in out.stdout.decode("utf-8", "replace")
+            except Exception:
+                alive = True
+        if alive:
+            raise SystemExit(f"{serial} 已經有掃描程序在跑（PID {pid}），這台不用再開一個")
+        os.remove(path)                     # 上次被砍掉留下的
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+    return path
+
+
 def cmd_run(args):
     """一直從工作清單拿切片來掃。兩台各跑一個這個指令就會自己分工。"""
+    lock = _run_lock(args.serial)
     dev = Device(args.serial)
     fails = 0
     while True:
@@ -1862,23 +2004,28 @@ def cmd_run(args):
                                args.resume, args.workers)
         except Exception as e:
             print(f"！{t}/{team} 掃到一半失敗：{e}", flush=True)
-            finish_slice(args.serial, t, team, "failed")
+            finish_slice(args.serial, t, team, "pending")   # 放回待辦，等一下再試
             fails += 1
-            if fails >= 3:
-                print("連續失敗太多次，停下來讓人看一眼")
+            if fails >= 12:
+                print("失敗次數太多，停下來讓人看一眼")
                 return
             continue
         if got is None or got < 0:
-            finish_slice(args.serial, t, team, "failed")
+            # 放回待辦而不是標成失敗：多半是彈窗或畫面沒回到位，換下一片再回頭試
+            finish_slice(args.serial, t, team, "pending")
             fails += 1
-            if fails >= 3:
-                print("連續失敗太多次，停下來讓人看一眼")
+            if fails >= 12:
+                print("失敗次數太多，停下來讓人看一眼")
                 return
         else:
             fails = 0
             # 掃不齊就標成 partial，之後可以只補這些切片
             state = "done" if got >= max(1, total) * 0.98 or total == 0 else "partial"
             finish_slice(args.serial, t, team, state, got)
+    try:
+        os.remove(lock)
+    except OSError:
+        pass
 
 
 def cmd_status(args):
@@ -2230,37 +2377,48 @@ def cmd_names(args):
         os.makedirs(pool, exist_ok=True)
         for f in os.listdir(pool):
             os.remove(os.path.join(pool, f))
-        clusters = []                       # [(代表點陣, 次數)]
+        # 每個字形群除了代表點陣，也記下「它出現在哪個名字、名字裡的哪一段」，
+        # 這樣標記時看得到上下文——光看一根豎線分不出 l 和 I，看到 "Slaughter" 就知道了。
+        clusters = []            # [代表點陣, 次數, 來源檔, x0, x1]
         total = GLYPH_W * GLYPH_H
         for f in files:
             img = _load(f)
             if img is None:
                 continue
-            for _, g in name_glyphs(img):
+            gs = name_glyphs(img)
+            for i, (x, g) in enumerate(gs):
                 if args.only_unknown:
                     lab, sim, margin = match_glyph(g, "name")
                     if lab is not None and sim >= 0.90 and margin >= 0.02:
                         continue
-                for i, (rep, n) in enumerate(clusters):
-                    if 1.0 - np.count_nonzero(g ^ rep) / total >= 0.93:
-                        clusters[i] = (rep, n + 1)
+                x1 = gs[i + 1][0] if i + 1 < len(gs) else x + 24
+                for c in clusters:
+                    if 1.0 - np.count_nonzero(g ^ c[0]) / total >= 0.93:
+                        c[1] += 1
                         break
                 else:
-                    clusters.append((g, 1))
-        clusters.sort(key=lambda t: -t[1])
+                    clusters.append([g, 1, f, x, x1])
+        clusters.sort(key=lambda c: -c[1])
         clusters = clusters[:args.max_clusters]
-        cols, cell, pad = 8, 5, 10
-        rows = (len(clusters) + cols - 1) // cols
-        cw, ch = GLYPH_W * cell + pad * 2, GLYPH_H * cell + pad * 2 + 18
-        sheet = np.full((max(1, rows) * ch, cols * cw), 255, np.uint8)
-        for i, (rep, n) in enumerate(clusters):
-            big = cv2.resize(rep * 255, (GLYPH_W * cell, GLYPH_H * cell),
-                             interpolation=cv2.INTER_NEAREST)
-            r, c = divmod(i, cols)
-            y0, x0 = r * ch + 18, c * cw + pad
-            sheet[y0:y0 + big.shape[0], x0:x0 + big.shape[1]] = 255 - big
-            cv2.putText(sheet, f"{i+1}({n})", (c * cw + 3, r * ch + 14),
-                        cv2.FONT_HERSHEY_PLAIN, 0.9, 0, 1, cv2.LINE_AA)
+        # 一列＝放大的字形 ＋ 它所在名字的裁圖（用框標出位置）
+        rowh, gw = 54, 90
+        sheet = np.full((max(1, len(clusters)) * rowh, gw + 470, 3), 30, np.uint8)
+        for i, (rep, n, src, x0, x1) in enumerate(clusters):
+            y = i * rowh
+            big = cv2.cvtColor(cv2.resize(rep * 255, (34, 48), interpolation=cv2.INTER_NEAREST),
+                               cv2.COLOR_GRAY2BGR)
+            sheet[y + 3:y + 51, 4:38] = 255 - big
+            cv2.putText(sheet, f"{i+1}({n})", (42, y + 32), cv2.FONT_HERSHEY_PLAIN,
+                        0.95, (200, 200, 200), 1, cv2.LINE_AA)
+            ctx = _load(src)
+            if ctx is not None:
+                box = name_box(ctx)
+                strip = ctx if box is None else ctx
+                vis = strip.copy()
+                cv2.rectangle(vis, (int(x0) - 2, 0), (int(x1) + 2, vis.shape[0] - 1),
+                              (0, 230, 255), 2)
+                vis = cv2.resize(vis, (460, 46))
+                sheet[y + 4:y + 50, gw:gw + 460] = vis
             cv2.imencode(".png", rep * 255)[1].tofile(
                 os.path.join(pool, f"{i+1:03d}.png"))
         cv2.imencode(".png", sheet)[1].tofile(args.out)
@@ -2285,6 +2443,44 @@ def cmd_names(args):
                 pairs.append((c, _norm_glyph(img)))
         added = _save_protos("name", pairs, cap=40)
         print(f"新增 {added} 個字形，name 現在共 {len(load_glyphs('name'))} 個樣本")
+        return
+    if args.action == "extend":
+        # 自我擴張：先用現有樣本讀，已知的字都跟 tesseract 對得上、只剩少數未知時，
+        # 未知那幾格就照 tesseract 的對應字收下來。這樣不必要求整串讀對，
+        # 學得到大寫、數字和撇號（"J. Lee'26" 這種名字 tesseract 從來讀不全）。
+        pairs, used = [], 0
+        why = {"字數對不上": 0, "已知字不一致": 0, "未知太多": 0, "沒讀到": 0}
+        for f in files:
+            img = _load(f)
+            if img is None:
+                continue
+            gs = name_glyphs(img)
+            if len(gs) < 3:
+                why["沒讀到"] += 1
+                continue
+            txt, conf = ocr_name(img)
+            letters = re.sub(r"\s+", "", txt)
+            if len(letters) != len(gs):
+                why["字數對不上"] += 1
+                continue
+            labs = [match_glyph(g, "name") for _, g in gs]
+            known = [(i, l[0]) for i, l in enumerate(labs)
+                     if l[0] is not None and l[1] >= 0.90 and l[2] >= 0.02]
+            if len(known) < max(3, int(len(gs) * 0.6)):
+                why["未知太多"] += 1
+                continue
+            if any(letters[i] != lab for i, lab in known):
+                why["已知字不一致"] += 1
+                continue
+            new = [(letters[i], gs[i][1]) for i in range(len(gs))
+                   if i not in {k for k, _ in known}]
+            if new:
+                pairs += new
+                used += 1
+        print("  略過原因:", why)
+        added = _save_protos("name", pairs, cap=40)
+        print(f"{len(files)} 張裁圖裡，{used} 張補到新字元；新增 {added} 個字形樣本，"
+              f"現在共 {len(load_glyphs('name'))} 個")
         return
     if args.action == "harvest":
         pairs, used = [], 0
@@ -2587,7 +2783,7 @@ def main():
     p.add_argument("--expect-max", type=int, default=1200)
 
     p = sub.add_parser("names", help="名字：收字形樣本／離線重讀")
-    p.add_argument("action", choices=("collect", "label", "harvest", "read"))
+    p.add_argument("action", choices=("collect", "label", "harvest", "extend", "read"))
     p.add_argument("--frames", default="")
     p.add_argument("--limit", type=int)
     p.add_argument("--min-conf", type=float, default=88.0)
