@@ -48,6 +48,7 @@ TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 DEV_DIR = "/data/local/tmp/dexshots"
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dex_data")
 LABELS_PATH = os.path.join(OUT_DIR, "potential_labels.json")
+POT_UNKNOWN_DIR = os.path.join(OUT_DIR, "pot_unknown")   # 沒見過的潛力名稱，留圖給人標
 
 DEVICE_SIZE = (900, 1600)          # 圖鑑是直向的，screencap 出來就是這個尺寸
 GAME_PKG = "com.com2us.futuremlb.android.google.global.normal"
@@ -327,6 +328,23 @@ def _read(mask, whitelist, psm, scale):
     if not words:
         return "", -1.0
     return " ".join(words), sum(confs) / len(confs)
+
+
+_OCR_CACHE = {}
+
+
+def ocr_cached(img, whitelist, psm, scale, key_extra=""):
+    """
+    球種與等級那幾格的字疊在單色面板上，每張卡畫出來一模一樣，
+    但一張投手卡要讀十格——快取起來之後幾乎都是查表，省下大半解析時間。
+    """
+    k = (phash(img), whitelist, psm, scale, key_extra)
+    hit = _OCR_CACHE.get(k)
+    if hit is None:
+        hit = ocr_field(img, whitelist, psm, scale)
+        if len(_OCR_CACHE) < 4000:
+            _OCR_CACHE[k] = hit
+    return hit
 
 
 def ocr_field(img, whitelist=None, psm=7, scale=4, early=88.0, min_len=2):
@@ -786,6 +804,35 @@ def potential_slots(img, x, y):
     return dots, locks
 
 
+_POT_LABELS = None
+
+
+def _pot_labels():
+    """潛力名稱對照表（每個行程讀一次）。"""
+    global _POT_LABELS
+    if _POT_LABELS is None:
+        try:
+            with open(LABELS_PATH, encoding="utf-8") as fh:
+                _POT_LABELS = json.load(fh)
+        except (OSError, ValueError):
+            _POT_LABELS = {}
+    return _POT_LABELS
+
+
+def _keep_unknown_pot(h, crop_img):
+    """
+    對照表裡沒有的潛力名稱，把那一小塊字存起來（每種只存一張）。
+    掃描時不存潛力裁圖（五萬張太多），但沒見過的就這幾十種，
+    不留圖的話事後根本沒辦法把它翻成文字。
+    """
+    if h in _pot_labels():
+        return
+    os.makedirs(POT_UNKNOWN_DIR, exist_ok=True)
+    path = os.path.join(POT_UNKNOWN_DIR, f"{h}.png")
+    if not os.path.exists(path):
+        cv2.imencode(".png", crop_img)[1].tofile(path)
+
+
 def parse_page2(img):
     """
     潛力：左三右二，取名稱（中文，存點陣指紋，之後查表變文字）。
@@ -801,7 +848,9 @@ def parse_page2(img):
             if float(name_img.std()) < 6.0:      # 空格
                 continue
             dots, locks = potential_slots(img, x, y)
-            slots.append({"name_hash": phash(name_img), "dots": dots, "locks": locks})
+            h = phash(name_img)
+            _keep_unknown_pot(h, name_img)
+            slots.append({"name_hash": h, "dots": dots, "locks": locks})
     return {"potentials": slots}
 
 
@@ -839,12 +888,11 @@ def parse_page3(img):
         pitches = []
         for y in PITCH_Y:
             for xn, xg in PITCH_COLS:
-                name, nconf = ocr_field(img[y:y + PITCH_H, xn:xn + PITCH_NAME_W],
-                                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-                                        psm=7, scale=4)
+                name, nconf = ocr_cached(img[y:y + PITCH_H, xn:xn + PITCH_NAME_W],
+                                         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 7, 4)
                 name = re.sub(r"[^A-Z0-9]", "", (name or "").upper())
-                grade, gconf = ocr_field(img[y:y + PITCH_H, xg:xg + PITCH_GRADE_W],
-                                         "SABCD", psm=10, scale=5)
+                grade, gconf = ocr_cached(img[y:y + PITCH_H, xg:xg + PITCH_GRADE_W],
+                                          "SABCD", 10, 5)
                 grade = (grade or "").strip()[:1]
                 if not (2 <= len(name) <= 4) or grade not in ("S", "A", "B", "C", "D"):
                     continue
@@ -2607,8 +2655,9 @@ def cmd_export(args):
     path = os.path.join(OUT_DIR, "cards.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(out, fh, ensure_ascii=False)
-    # 網頁直接用 file:// 開的時候 fetch 會被 CORS 擋掉，所以也輸出一份 .js
-    webdir = os.path.join(os.path.dirname(OUT_DIR), "web")
+    # 網頁直接用 file:// 開的時候 fetch 會被 CORS 擋掉，所以也輸出一份 .js。
+    # 放在 docs/ 是為了 GitHub Pages——它只認 repo 根目錄或 docs/。
+    webdir = os.path.join(os.path.dirname(OUT_DIR), "docs")
     os.makedirs(webdir, exist_ok=True)
     with open(os.path.join(webdir, "cards.js"), "w", encoding="utf-8") as fh:
         fh.write("window.CARDS=")
@@ -2629,21 +2678,29 @@ def cmd_pots(args):
     import glob as _glob
     if args.action == "collect":
         seen = {}
-        for path in sorted(_glob.glob(args.frames)):
-            img = _load(path)
-            if img is None or page_of(img)[0] != 1:
-                continue
-            for i, y in enumerate(POT_Y):
-                for x in (POT_L_X, POT_R_X):
-                    if x == POT_R_X and i == 2:
-                        continue
-                    c = img[y:y + POT_NAME_H, x:x + POT_NAME_W]
-                    if float(c.std()) < 6.0:
-                        continue
-                    h = phash(c)
-                    if h not in seen:
-                        seen[h] = [c, 0]
-                    seen[h][1] += 1
+        if args.frames:                      # 從完整畫面收（校正時用）
+            for path in sorted(_glob.glob(args.frames)):
+                img = _load(path)
+                if img is None or page_of(img)[0] != 1:
+                    continue
+                for i, y in enumerate(POT_Y):
+                    for x in (POT_L_X, POT_R_X):
+                        if x == POT_R_X and i == 2:
+                            continue
+                        c = img[y:y + POT_NAME_H, x:x + POT_NAME_W]
+                        if float(c.std()) < 6.0:
+                            continue
+                        h = phash(c)
+                        if h not in seen:
+                            seen[h] = [c, 0]
+                        seen[h][1] += 1
+        else:                                # 掃描時留下來的「沒見過的潛力名稱」
+            for f in sorted(os.listdir(POT_UNKNOWN_DIR)) if os.path.isdir(POT_UNKNOWN_DIR) else []:
+                if not f.endswith(".png"):
+                    continue
+                c = _load(os.path.join(POT_UNKNOWN_DIR, f))
+                if c is not None:
+                    seen[os.path.splitext(f)[0]] = [c, 1]
         order = sorted(seen.items(), key=lambda kv: -kv[1][1])
         cell_h = POT_NAME_H + 8
         sheet = np.zeros((max(1, len(order)) * cell_h, POT_NAME_W + 210, 3), np.uint8)

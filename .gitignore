@@ -11,8 +11,8 @@ dex_data/name_fix.json
 dex_data/_pot_pool.json
 dex_data/_filter_fail.png
 dex_data/teams/
-web/cards.js
-web/index.html.bak
+# docs/cards.js 要進版控（GitHub Pages 靠它），所以不排除
+docs/index.html.bak
 
 # 字形樣本的暫存池（label 之後就不需要了）
 dex_data/glyphs/*/_pool/

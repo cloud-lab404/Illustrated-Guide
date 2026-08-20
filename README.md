@@ -7,7 +7,9 @@ MLB圖鑑。
 全程走 ADB，不佔用實體滑鼠鍵盤、也不需要模擬器視窗在前景，所以掃描時可以正常用電腦。
 
 - `dex.py` — 掃描、辨識、匯出
-- `web/index.html` — 網頁圖鑑（篩選介面照遊戲的「進階搜尋」排）
+- `docs/index.html` — 網頁圖鑑（篩選介面照遊戲的「進階搜尋」排）
+
+線上版：https://cloud-lab404.github.io/Illustrated-Guide/
 
 ## 需要什麼
 
@@ -51,7 +53,12 @@ python dex.py names read         # 從存下來的名字裁圖重讀，寫成對
 python dex.py export             # 產生 web/cards.js（名字會優先用對照表）
 ```
 
-5. 用瀏覽器打開 `web/index.html`。資料是 `web/cards.js`，用 `file://` 直接開也載得到。
+5. 用瀏覽器打開 `docs/index.html`。資料是 `docs/cards.js`，用 `file://` 直接開也載得到。
+
+想放到網路上看的話，`docs/` 就是 GitHub Pages 的來源：
+repo 的 **Settings → Pages → Build and deployment → Deploy from a branch**，
+選 `main` 分支、資料夾選 `/docs`，存檔後幾十秒就會有網址
+（免費方案的 Pages 只支援公開 repo）。
 
 掃描可以隨時中斷（Ctrl+C）；工作清單記著哪些切片做完了，再執行 `run` 會接著跑。
 
@@ -161,8 +168,8 @@ python dex.py teams --type Moment                # 收球隊 logo 樣本（備�
 | `dex_data/queue.json` | 420 個切片的工作清單（兩台共用，有檔案鎖）|
 | `dex_data/<類型>/<球隊>.jsonl` | 掃描結果，一行一張卡（不進版控）|
 | `dex_data/<類型>/names/` | 每張卡的名字裁圖，給離線重讀用（不進版控）|
-| `web/index.html` | 網頁圖鑑 |
-| `web/cards.js` | `dex.py export` 產生的資料（不進版控）|
+| `docs/index.html` | 網頁圖鑑（同時是 GitHub Pages 的來源）|
+| `docs/cards.js` | `dex.py export` 產生的資料（要上 Pages 才需要進版控）|
 
 字形樣本、徽章樣本、潛力對照表都放進版控了，所以 clone 下來可以直接跑，
-不用重新標記。掃描結果與名字裁圖太大，沒有進版控。
+不用重新標記。掃描結果與名字裁圖太大，沒有進版控；`docs/cards.js` 為了 Pages 例外收進版控。
